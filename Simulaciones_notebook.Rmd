@@ -1,0 +1,467 @@
+---
+title: "Simulaciones — repaso con teoría"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+Este notebook intercala el código real de `Simulaciones.R` con la
+explicación conceptual de qué se simula, qué fórmula se aplica y por qué
+esa distribución/decisión tiene sentido en teoría. Corre cada bloque con
+`Ctrl+Shift+Enter` (o el botón de play a la derecha del chunk) y el
+resultado/gráfico aparece justo debajo, igual que un notebook de
+Jupyter.
+
+A diferencia del script original, aquí **no hace falta** el truco de
+`rstudioapi::getActiveDocumentContext()` — un R Notebook usa por defecto
+la carpeta donde vive el propio archivo `.Rmd` como directorio de
+trabajo, tanto al correr chunks interactivamente como al hacer
+"Preview".
+
+## Configuración inicial
+
+```{r setup}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, EnvStats, ggpubr, psych, readr, scales)
+options(scipen = 999)
+```
+
+------------------------------------------------------------------------
+
+# Parte 1 — Comparación distribución teórica vs. simulada
+
+**Qué hace**: genera valores aleatorios de una distribución y compara el
+histograma resultante contra la curva de densidad teórica exacta.
+
+**Por qué (teoría)**: ilustra la **Ley de los Grandes Números** — a
+mayor tamaño de muestra, la distribución empírica converge a la teórica.
+Es la base de confianza para todo lo que sigue: si más adelante se
+simulan 10,000 escenarios de costo asumiendo una triangular, hace falta
+creer que "simular muchas veces" reproduce de verdad esa distribución.
+
+## Uniforme
+
+Máxima incertidumbre dentro de un rango, sin razón para preferir ningún
+valor — parámetros: mínimo, máximo.
+
+```{r uniforme}
+minimo <- 10
+maximo <- 25
+
+teorica <- ggplot(data = data.frame(x = c(minimo-0.1, maximo+0.1)), mapping = aes(x)) +
+  stat_function(fun = dunif, n = 1001, args = list(min = minimo, max = maximo),
+                color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "x", title = "Distribucion teorica")
+
+simulacion <- runif(n = 100000, min = minimo, max = maximo)
+
+plot_simulacion <- ggplot(data = data.frame(simulacion), mapping = aes(simulacion)) +
+  geom_histogram(aes(y = after_stat(density)), color = "black", fill = "steelblue3",
+                 bins = nclass.Sturges(simulacion)) +
+  theme_light() +
+  labs(x = "x", y = "Densidad", title = "Distribucion simulada")
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(teorica, plot_simulacion)) %>%
+  ggpubr::annotate_figure(top = "Distribucion uniforme")
+
+# La curtosis se calcula restando 3 para centrarla en 0
+psych::describe(simulacion)
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(x = simulacion, probs = percentil)
+```
+
+## Binomial
+
+Conteo de éxitos en `n` ensayos independientes con probabilidad `p` fija
+— no es continua, así que la comparación es entre "barras" teóricas y
+simuladas, no curvas suaves.
+
+```{r binomial}
+n <- 100
+p <- 0.10
+
+teorica <- ggplot(data = data.frame(x = c(0, n)), mapping = aes(x)) +
+  stat_function(fun = dbinom, n = 101, args = list(size = n, prob = p),
+                color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "x", title = "Distribucion teorica") +
+  scale_x_continuous(breaks = seq(0, n, 5))
+
+simulacion <- rbinom(n = 100000, size = n, prob = p)
+
+plot_simulacion <- ggplot(data = data.frame(simulacion), mapping = aes(simulacion)) +
+  geom_histogram(aes(y = after_stat(density)), color = "black", fill = "steelblue3",
+                 bins = nclass.Sturges(simulacion)) +
+  theme_light() +
+  labs(x = "x", y = "Densidad", title = "Distribucion simulada")
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(teorica, plot_simulacion)) %>%
+  ggpubr::annotate_figure(top = "Distribucion binomial")
+
+psych::describe(simulacion)
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(x = simulacion, probs = percentil)
+```
+
+## Triangular
+
+No hay histórico, solo el juicio de un experto: mínimo, más probable
+(moda), máximo — **estimación PERT / de tres puntos**, típica en gestión
+de proyectos e ingeniería de costos, precisamente porque no exige asumir
+simetría.
+
+```{r triangular}
+minimo <- 1
+maximo <- 10
+moda <- 7
+
+teorica <- ggplot(data = data.frame(x = c(minimo-0.1, maximo+0.1)), mapping = aes(x)) +
+  stat_function(fun = dtri, n = 1001, args = list(min = minimo, max = maximo, mode = moda),
+                color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "x", title = "Distribucion teorica")
+
+simulacion <- EnvStats::rtri(n = 100000, min = minimo, max = maximo, mode = moda)
+
+plot_simulacion <- ggplot(data = data.frame(simulacion), mapping = aes(simulacion)) +
+  geom_histogram(aes(y = after_stat(density)), color = "black", fill = "steelblue3",
+                 bins = nclass.Sturges(simulacion)) +
+  theme_light() +
+  labs(x = "x", y = "Densidad", title = "Distribucion simulada")
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(teorica, plot_simulacion)) %>%
+  ggpubr::annotate_figure(top = "Distribucion triangular")
+
+psych::describe(simulacion)
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(x = simulacion, probs = percentil)
+```
+
+## Normal
+
+La variable resulta de sumar muchas causas pequeñas independientes
+(Teorema del Límite Central) — retornos financieros, errores de
+medición, etc.
+
+```{r normal}
+media <- 10
+desv <- 3
+
+teorica <- ggplot(data = data.frame(x = c(media - 4*desv, media + 4*desv)), mapping = aes(x)) +
+  stat_function(fun = dnorm, n = 1001, args = list(mean = media, sd = desv),
+                color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "x", title = "Distribucion teorica")
+
+simulacion <- rnorm(n = 10000, mean = media, sd = desv)
+
+plot_simulacion <- ggplot(data = data.frame(simulacion), mapping = aes(simulacion)) +
+  geom_histogram(aes(y = after_stat(density)), color = "black", fill = "steelblue3",
+                 bins = nclass.Sturges(simulacion)) +
+  theme_light() +
+  labs(x = "x", y = "Densidad", title = "Distribucion simulada")
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(teorica, plot_simulacion)) %>%
+  ggpubr::annotate_figure(top = "Distribucion normal")
+
+psych::describe(simulacion)
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(x = simulacion, probs = percentil)
+```
+
+------------------------------------------------------------------------
+
+# Parte 2 — Ejemplo del café: combinar dos incertidumbres
+
+**Qué hace**: simula dos variables inciertas *independientes* — millones
+de consumidores y tazas por persona — y las **multiplica**.
+
+$$\text{tasas\_total} = \text{personas} \times \text{tasas}$$
+
+**Por qué es el paso conceptual clave**: es la primera vez que el código
+**combina** incertidumbres en vez de solo mostrarlas por separado. Si
+$Y = f(X_1, X_2)$ y ambas son inciertas, la incertidumbre de $Y$ no se
+calcula con álgebra simple — se **propaga** simulando miles de
+combinaciones plausibles de $X_1$ y $X_2$ a la vez. Esa es la definición
+operativa de un Monte Carlo.
+
+**Supuesto implícito (y cuestionable)**: al multiplicar `personas` y
+`tasas` directamente, el código asume que son **independientes** entre
+sí. Modelar correlación exigiría copulas o una matriz de correlación
+explícita — no está aquí.
+
+```{r cafe}
+personas_cafe <- ggplot(data = data.frame(x = c(100, 120)), mapping = aes(x)) +
+  stat_function(fun = EnvStats::dtri, n = 1001,
+                args = list(min = 100, max = 120, mode = 108), color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "Millones de consumidores de café",
+       title = "Consumidores de café en EE.UU. (millones)")
+
+tasas_cafe <- ggplot(data = data.frame(x = c(3, 3.5)), mapping = aes(x)) +
+  stat_function(fun = EnvStats::dtri, n = 1001,
+                args = list(min = 3, max = 3.5, mode = 3.1), color = "steelblue3") +
+  theme_light() +
+  labs(y = "Densidad", x = "Tasas por día", title = "Promedio de tasas de café")
+
+ggarrange(ncol = 2, plotlist = list(personas_cafe, tasas_cafe))
+
+personas <- EnvStats::rtri(n = 10000, min = 100, max = 120, mode = 108)
+tasas <- EnvStats::rtri(n = 10000, min = 3, max = 3.5, mode = 3.1)
+tasas_total <- personas * tasas
+
+plot_tasas_total <- ggplot(data = data.frame(tasas_total), mapping = aes(tasas_total)) +
+  geom_histogram(color = "black", fill = "steelblue3", bins = nclass.Sturges(tasas_total)) +
+  theme_light() +
+  labs(x = "Total de tasas (millones)", y = "Frecuencia",
+       title = "Tasas de café consumidas diariamente en EE.UU.")
+plot_tasas_total
+
+psych::describe(tasas_total)
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(x = tasas_total, probs = percentil)
+```
+
+------------------------------------------------------------------------
+
+# Parte 3 — VPN de un proyecto (la parte con más teoría financiera)
+
+**Qué hace**: simula 10,000 escenarios de precio, costo y ventas;
+calcula la utilidad y el VPN en cada uno; resume qué tan probable es que
+el proyecto sea rentable.
+
+**Las distribuciones elegidas, y por qué importan**:
+
+-   **Precio → Normal**: razonable si el precio fluctúa por factores de
+    mercado simétricos alrededor de un valor esperado, sin sesgo fuerte
+    hacia arriba o abajo.
+-   **Costo → Triangular**: misma lógica PERT de la Parte 1 — un costo
+    unitario suele venir de una estimación de ingeniería/compras, no de
+    un histórico con media/varianza conocidas.
+-   **Ventas → Lognormal**: la elección más importante. Los volúmenes de
+    venta **no pueden ser negativos** y suelen tener cola larga a la
+    derecha. Una normal permitiría valores negativos absurdos; la
+    lognormal los excluye por construcción.
+
+```{r vpn-setup}
+set.seed(41677)
+
+n_sim <- 10000
+inv_inicial <- 200000
+tasa <- 0.10 # 10% EA
+tiempo <- 2
+
+precios <- rnorm(n = n_sim, mean = 200, sd = 20)
+costos <- EnvStats::rtri(n = n_sim, min = 80, max = 130, mode = 100)
+ventas <- rlnorm(n = n_sim, meanlog = log(5000), sdlog = 0.2) %>% round(0) # No hay ventas fraccionadas
+```
+
+**El motor del cálculo**:
+
+$$\text{utilidad} = (\text{precio} - \text{costo}) \times \text{ventas}$$
+$$\text{VPN} = \frac{\text{utilidad}}{(1+\text{tasa})^{\text{tiempo}}} - \text{inversión\_inicial}$$
+
+Dividir por $(1+\text{tasa})^{\text{tiempo}}$ trae la utilidad futura a
+**valor presente** (un dólar futuro vale menos que uno hoy). Es una
+simplificación asumir que toda la utilidad llega de golpe al final del
+año 2, en vez de flujos anuales descontados por separado — razonable
+para un ejercicio.
+
+```{r vpn-calculo}
+utilidad <- (precios - costos) * ventas
+vpn <- (utilidad / (1 + tasa)^tiempo) - inv_inicial
+```
+
+`mean(vpn > 0) * 100` es el truco central: en vez de una fórmula
+analítica de probabilidad, cuenta directamente qué fracción de las
+10,000 simulaciones dio VPN positivo — reemplaza al VPN de "un solo
+número" del enfoque tradicional, dando una **distribución de resultados
+posibles** en vez de una respuesta binaria.
+
+```{r vpn-resultados}
+prob_exito <- mean(vpn > 0) * 100
+prob_exito
+
+vpn_esperado <- mean(vpn)
+vpn_esperado
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+quantile(vpn, percentil)
+```
+
+```{r vpn-grafico}
+plot_vpn <- ggplot(data = data.frame(vpn), mapping = aes(vpn)) +
+  geom_histogram(color = "black", fill = "steelblue3", bins = nclass.Sturges(vpn)) +
+  annotate(geom = "segment", x = vpn_esperado, xend = vpn_esperado, y = 0, yend = Inf,
+           color = "darkgreen") +
+  annotate(geom = "segment", x = 0, xend = 0, y = 0, yend = Inf, color = "darkred") +
+  theme_light() +
+  labs(x = "VPN ($)", y = "Frecuencia", title = "Distribución del VPN del proyecto") +
+  scale_x_continuous(labels = label_currency())
+plot_vpn
+```
+
+> **Nota de calidad de datos**: el comentario original del script decía
+> "precio con media 150", pero el código usa `mean = 200` — el número
+> que manda es el del código; quedó corregido aquí para que no confunda
+> al repasar.
+
+------------------------------------------------------------------------
+
+# Parte 4 — Monte Carlo de trayectorias (crecimiento de una inversión)
+
+**Qué hace distinto de la Parte 3**: en el VPN se simulan 10,000
+escenarios de un **resultado final único**. Aquí se simulan 51
+**trayectorias completas en el tiempo** (mes a mes, 10 años) — ahora no
+solo importa el destino final, sino el camino recorrido.
+
+**La decisión teórica clave**: usar
+`rnorm(mean = media_portfolio, sd = sd_portfolio)`, con media y
+desviación **calculadas de retornos históricos reales**, para simular
+retornos futuros — un enfoque **paramétrico**.
+
+> ⚠️ Simplificación fuerte: los retornos reales suelen tener colas más
+> pesadas que una normal y pueden estar autocorrelacionados (rachas) —
+> cosas que este modelo ignora. Una alternativa más robusta es el
+> **bootstrap histórico** (remuestrear los retornos reales con
+> reemplazo) — así está construido, de hecho, el motor de Monte Carlo
+> que ya se usa en el proyecto QUANT para las estrategias de trading.
+
+```{r crecimiento-simple}
+retornos <- readr::read_rds(file = "Retornos mensuales.rds")
+
+media_portfolio <- mean(retornos)
+sd_portfolio <- sd(retornos)
+
+set.seed(1501)
+
+simulacion_retornos <- rnorm(n = 120, mean = media_portfolio, sd = sd_portfolio)
+
+crecimiento <- dplyr::tibble(c(1, 1 + simulacion_retornos)) %>%
+  `colnames<-`("crecimiento")
+
+simulacion_inversion <- crecimiento %>%
+  dplyr::mutate(tasa_acumulada1 = purrr::accumulate(crecimiento, function(x, y) x*y),
+                tasa_acumulada2 = purrr::accumulate(crecimiento, `*`),
+                tasa_acumulada3 = cumprod(crecimiento)) %>%
+  dplyr::select(-crecimiento)
+
+cagr <- ((simulacion_inversion$tasa_acumulada1[nrow(simulacion_inversion)]^(1/10)) - 1) * 100
+cagr
+```
+
+El capital no crece sumando retornos, sino **multiplicando** factores de
+crecimiento uno tras otro (interés compuesto):
+
+$$\text{capital\_acumulado} = (1+r_1)(1+r_2)\cdots(1+r_t)$$
+
+El chunk de arriba lo calcula 3 veces con métodos distintos solo para
+mostrar que dan lo mismo — en la práctica basta con `cumprod`.
+
+## Función reutilizable + 51 repeticiones
+
+```{r funcion-y-monte-carlo}
+simulacion_activo <- function(valor_inicial, media_rendimiento, sd_rendimiento, periodos){
+  activo <- data.frame(periodo = 0:periodos) %>%
+    mutate(retorno = c(0, rnorm(n = periodos, mean = media_rendimiento, sd = sd_rendimiento))) %>%
+    mutate(rendimiento = 1 + retorno) %>%
+    mutate(rend_acum = cumprod(rendimiento)) %>%
+    mutate(retorno_acum = rend_acum - 1) %>%
+    mutate(capital = valor_inicial * rend_acum, .after = 1)
+  return(activo)
+}
+
+capital_inicial <- 20000
+tiempo <- 120
+numero_simulaciones <- 51
+
+monte_carlo_sim <-
+  purrr::map(.x = rep(capital_inicial, numero_simulaciones),
+             .f = simulacion_activo,
+             periodos = tiempo,
+             media_rendimiento = media_portfolio,
+             sd_rendimiento = sd_portfolio) %>%
+  list_rbind(names_to = "simulacion") %>%
+  mutate(simulacion = factor(simulacion))
+```
+
+Las 51 corridas usan la *misma* media/desviación pero retornos
+aleatorios distintos cada mes, así que divergen entre sí solo por azar.
+
+```{r grafico-abanico}
+plot_simulaciones <- monte_carlo_sim %>%
+  ggplot(aes(x = periodo, y = capital, col = simulacion)) +
+  geom_line() +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x = "Mes", y = "USD", title = "Simulación de una inversión") +
+  scale_y_continuous(labels = label_currency())
+plot_simulaciones
+```
+
+El "gráfico de abanico" muestra visualmente el rango de resultados
+posibles. El resumen de percentiles que sigue es conceptualmente un
+**Value-at-Risk** informal: en vez de calcular analíticamente "¿cuál es
+el peor 5% de los casos?", se lee directamente de la distribución
+simulada de capitales finales.
+
+```{r resumen-percentiles}
+probs <- c(.005, .025, 0.05, .25, .5, .75, 0.95, .975, .995)
+
+sim_final <- monte_carlo_sim %>%
+  group_by(simulacion) %>%
+  summarise(final = last(capital))
+
+resumen_simulaciones <- sim_final %>%
+  summarise(media = mean(final), desv = sd(final), maximo = max(final),
+            minimo = min(final), mediana = median(final))
+resumen_simulaciones
+
+cuantiles <- quantile(sim_final$final, probs = probs)
+cuantiles
+```
+
+> **Nota crítica**: 51 simulaciones es un número bajo para un Monte
+> Carlo serio (usualmente 1,000-10,000+ para que los percentiles de
+> cola, como el 0.5%/99.5% de arriba, sean estables). Con solo 51
+> corridas esos percentiles extremos son poco confiables
+> estadísticamente. Para solo ilustrar el concepto del abanico, 51 está
+> bien; para un análisis de riesgo real, subiría el número de
+> simulaciones a costa de graficar solo percentiles/bandas en vez de
+> cada trayectoria individual.
+
+```{r grafico-extremos}
+plot_resumen_simulaciones <- monte_carlo_sim %>%
+  dplyr::group_by(simulacion) %>%
+  dplyr::filter(last(capital) == resumen_simulaciones$maximo ||
+                  last(capital) == resumen_simulaciones$minimo ||
+                  last(capital) == resumen_simulaciones$mediana) %>%
+  ggplot(aes(x = periodo, y = capital, color = simulacion)) +
+  geom_line() +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x = "Mes", y = "USD", title = "Extremos simulación de una inversión") +
+  scale_y_continuous(labels = label_currency())
+plot_resumen_simulaciones
+```
+
+------------------------------------------------------------------------
+
+# Resumen de fórmulas clave
+
+| Concepto              | Fórmula                                          |
+|-----------------------|--------------------------------------------------|
+| VPN                   | `utilidad / (1+tasa)^tiempo − inversión_inicial` |
+| Probabilidad de éxito | `mean(VPN > 0) × 100`                            |
+| Crecimiento compuesto | `(1+r₁)(1+r₂)⋯(1+r_t)`                           |
+| CAGR                  | `(crecimiento_total^(1/años) − 1) × 100`         |
