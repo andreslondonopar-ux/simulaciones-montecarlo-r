@@ -1,0 +1,389 @@
+---
+title: "Distribuciones teóricas y correlaciones — repaso con teoría"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+Este notebook intercala el código real de `Distribuciones y
+correlaciones.R` (material de clase, autor: Andres Salas) con la
+explicación conceptual: qué distribución se usa, por qué, y cómo se
+llega de "graficar una densidad teórica" a "construir la matriz de
+correlaciones entre varias acciones" — que es exactamente el insumo que
+se necesita más adelante para optimización de portafolios (varianza de
+un portafolio = combinación de varianzas individuales **y**
+covarianzas entre activos).
+
+## Configuración inicial
+
+```{r setup}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, EnvStats, ggpubr, quantmod, TTR, ggcorrplot, xts)
+options(scipen = 999)
+```
+
+------------------------------------------------------------------------
+
+# Parte 1 — Distribución discreta de probabilidad
+
+**Qué hace**: define a mano una distribución de probabilidad discreta
+(unos pocos precios posibles, cada uno con su propia probabilidad) y la
+grafica de dos formas: función de masa (`pmf`, la probabilidad de cada
+valor exacto) y función de probabilidad acumulada (`cdf`,
+$P(X \le x)$).
+
+**Por qué (teoría)**: es discreta porque el precio solo puede tomar
+esos 6 valores puntuales (450, 460, ..., 500) — no cualquier número
+entre medio. Por eso el gráfico correcto es de **barras/columnas**, no
+una curva continua: no tiene sentido "interpolar" entre 460 y 470
+porque esos valores intermedios tienen probabilidad cero por
+definición del problema. La `cdf` siempre es una función escalonada
+(step function) en una distribución discreta, porque salta de golpe en
+cada uno de los valores posibles.
+
+```{r discreta}
+precios <- data.frame(precio = seq(from = 450, to = 500, by = 10),
+                      prob = c(0.1, 0.15, 0.25, 0.3, 0.1, 0.1))
+precios
+```
+
+```{r discreta-masa}
+grafico_masa <- ggplot2::ggplot(data = precios, mapping = aes(x = precio, y = prob)) +
+  ggplot2::geom_col(color = "steelblue3", fill = "steelblue3", width = 0.4) +
+  theme_light() +
+  ggplot2::labs(x = "Precio", y = "Probabilidad", title = "Distribución de probabilidad MSFT") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+grafico_masa
+```
+
+```{r discreta-acumulada}
+grafico_prob <- ggplot2::ggplot(data = precios, mapping = aes(x = precio, y = cumsum(prob))) +
+  ggplot2::geom_step(color = "steelblue3", lwd = 1) +
+  theme_light() +
+  ggplot2::labs(x = "Precio", y = "Probabilidad", title = "Probabilidad acumulada MSFT") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(grafico_masa, grafico_prob)) %>%
+  ggpubr::annotate_figure(top = "Distribución discreta")
+```
+
+------------------------------------------------------------------------
+
+# Parte 2 — Distribución triangular
+
+**Qué hace**: grafica la densidad y la acumulada de una **Triangular**
+con mínimo, moda (valor más probable) y máximo definidos a mano.
+
+**Por qué (teoría)**: la Triangular es la distribución estándar cuando
+**no hay datos históricos** pero sí hay una opinión de experto sobre
+tres puntos: el peor caso, el caso más probable y el mejor caso — esto
+es exactamente la técnica **PERT** (Program Evaluation and Review
+Technique) que ya se usó en el taller para modelar el precio de venta
+en el VPN. A diferencia de la Normal, es **acotada** (no permite valores
+fuera de [mínimo, máximo]) — por eso nunca genera colas extremas, algo
+importante a la hora de comparar su comportamiento contra una Normal en
+la Parte 5.
+
+```{r triangular}
+minimo <- 460
+moda <- 495
+maximo <- 510
+
+densidad_tri <- ggplot(data = data.frame(x = c(minimo, maximo)), mapping = aes(x)) +
+  stat_function(fun = EnvStats::dtri,
+                n=1001,
+                args = list(min = minimo, max = maximo, mode = moda),
+                color = "steelblue3",
+                lwd = 1) +
+  theme_light() +
+  labs(y = "Densidad", x = "Precio", title = "Densidad") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+
+probabilidad_tri <- ggplot(data = data.frame(x = c(minimo, maximo)), mapping = aes(x)) +
+  stat_function(fun = EnvStats::ptri,
+                n=1001,
+                args = list(min = minimo, max = maximo, mode = moda),
+                color = "steelblue3",
+                lwd = 1) +
+  theme_light() +
+  labs(y = "Probabilidad", x = "Precio", title = "Probabilidad acumulada") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(densidad_tri, probabilidad_tri)) %>%
+  ggpubr::annotate_figure(top = "Distribución triangular")
+```
+
+------------------------------------------------------------------------
+
+# Parte 3 — Distribución normal
+
+**Qué hace**: grafica densidad y acumulada de una Normal con media y
+desviación estándar dadas.
+
+**Por qué (teoría)**: la Normal aparece cuando el resultado es la
+**suma** de muchos efectos pequeños e independientes (Teorema Central
+del Límite) — por eso es la distribución por defecto para variables
+como retornos de una acción (acumulación de muchas noticias/decisiones
+diarias). A diferencia de la Triangular, **no está acotada**: en teoría
+permite cualquier valor, aunque con probabilidad cada vez más chica
+mientras más lejos de la media (por eso aquí se grafica solo
+`media ± 4·desviación`, donde ya casi toda el área bajo la curva está
+contenida).
+
+```{r normal}
+media <- 485
+desv.estandar <- 17.5
+rango_min <- media - 4*desv.estandar
+rango_max <- media + 4*desv.estandar
+
+densidad_norm <- ggplot(data = data.frame(x = c(rango_min, rango_max)), mapping = aes(x)) +
+  stat_function(fun = dnorm,
+                n=1001,
+                args = list(mean = media, sd = desv.estandar),
+                color = "steelblue3",
+                lwd = 1) +
+  theme_light() +
+  labs(y = "Densidad", x = "Precio", title = "Densidad") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+
+probabilidad_norm <- ggplot(data = data.frame(x = c(rango_min, rango_max)), mapping = aes(x)) +
+  stat_function(fun = pnorm,
+                n=1001,
+                args = list(mean = media, sd = desv.estandar),
+                color = "steelblue3",
+                lwd = 1) +
+  theme_light() +
+  labs(y = "Probabilidad", x = "Precio", title = "Probabilidad acumulada") +
+  theme(axis.title = element_text(size = 9),
+        axis.text = element_text(size = 9),
+        plot.title = element_text(size = 11),
+        panel.grid = element_blank())
+
+ggpubr::ggarrange(ncol = 2, plotlist = list(densidad_norm, probabilidad_norm)) %>%
+  ggpubr::annotate_figure(top = "Distribución normal")
+```
+
+------------------------------------------------------------------------
+
+# Parte 4 — Percentiles teóricos: Normal vs. Triangular
+
+**Qué hace**: en vez de simular, calcula percentiles **exactos** (la
+función cuantil, inversa de la acumulada) tanto para la Normal como
+para la Triangular de las dos secciones anteriores.
+
+**Por qué (teoría)**: cuando se conoce la distribución de una variable
+de forma analítica, no hace falta simular para saber, por ejemplo, "¿bajo
+qué precio cae el 5% peor de los casos?" — se resuelve directo con la
+función cuantil ($Q(p)$, la inversa de la $cdf$). Esto es exactamente
+el mismo principio detrás del **VaR (Value at Risk)**: un percentil
+bajo (p.ej. 5%) de la distribución de pérdidas/retornos. Comparar los
+cuantiles de la Normal contra los de la Triangular en este mismo rango
+de precios permite ver en números concretos lo que ya se explicó en el
+taller: la Triangular, al estar acotada, nunca da un percentil tan
+extremo como la Normal en las colas.
+
+```{r percentiles-normal}
+cuartil <- c(0.25, 0.5, 0.75)
+valor_cuartil <- qnorm(p = cuartil, mean = media, sd = desv.estandar)
+cuartil_normal <- data.frame(cuartil, valor_cuartil)
+cuartil_normal
+
+percentil <- seq(from = 0.05, to = 0.95, by = 0.05)
+valor_percentil <- qnorm(p = percentil, mean = media, sd = desv.estandar)
+percentil_normal <- data.frame(percentil, valor_percentil)
+percentil_normal
+```
+
+```{r percentiles-triangular}
+tri_cuartil <- EnvStats::qtri(p = cuartil, min = minimo, max = maximo, mode = moda)
+cuartil_tri <- data.frame(cuartil, tri_cuartil)
+cuartil_tri
+
+tri_percentil <- EnvStats::qtri(p = percentil, min = minimo, max = maximo, mode = moda)
+percentil_tri <- data.frame(percentil, tri_percentil)
+percentil_tri
+```
+
+**Comparación (percentil 5%, el más relevante para riesgo de cola)**:
+la Normal da un valor de `r round(qnorm(0.05, media, desv.estandar), 1)`,
+mientras que la Triangular da `r round(EnvStats::qtri(0.05, minimo, maximo, moda), 1)`
+— la Triangular queda **acotada por su propio mínimo** (`r minimo`), así
+que su percentil 5% nunca puede bajar de ese piso, sin importar qué tan
+extremo sea el percentil que se pida. La Normal, en cambio, no tiene ese
+piso: sigue bajando (aunque cada vez con menos probabilidad) mientras
+más extremo el percentil.
+
+------------------------------------------------------------------------
+
+# Parte 5 — Datos reales: precios y retornos de varias acciones
+
+**Qué hace**: descarga precios diarios ajustados de 15 acciones reales
+desde Yahoo Finance, los convierte a precios de cierre mensual, y
+calcula el retorno logarítmico mensual de cada una.
+
+**Por qué (teoría)**: el **retorno logarítmico** ($\ln(P_t/P_{t-1})$)
+se usa en vez del retorno simple ($P_t/P_{t-1} - 1$) porque es
+**aditivo en el tiempo** (el retorno de 2 meses es la suma de los
+retornos logarítmicos de cada mes, no su producto) y porque es la
+cantidad que de verdad se comporta aproximadamente Normal — el
+**precio**, en cambio, es lognormal (producto de retornos, siempre
+positivo), no normal.
+
+```{r descarga-precios}
+acciones <- c("NVDA", "AAPL", "AMZN", "TSLA", "PG", "LLY", "NFLX", "ABT",
+              "MSFT", "INTC", "BBVA", "CRSR", "DB", "DUOL", "HOG")
+
+precio_diario <- quantmod::getSymbols(acciones, src = "yahoo",
+                               from = "2018-12-31",
+                               periodicity = "daily",
+                               auto.assign = TRUE,
+                               warnings = FALSE) %>%
+  purrr::map(~quantmod::Ad(get(.))) %>% # Extrae solo el precio ajustado de cada accion
+  purrr::reduce(merge.xts) %>% # Fusiona los items de la lista usando las fechas como indices
+  `colnames<-`(acciones) # Cambia los nombres de columna a los simbolos
+
+precio <- xts::to.monthly(x = precio_diario,
+                          indexAt = "lastof",
+                          OHLC = FALSE)
+
+head(precio)
+```
+
+## Cálculo de los retornos — y un bug real de `TTR::ROC`
+
+El script original de clase usa `TTR::ROC(x, type="continuous",
+na.pad=F)` para el retorno logarítmico. **Ese código tiene un bug real**
+(ya detectado al resolver el taller, aquí se confirma que es más grave
+de lo que parecía): con `na.pad=FALSE` sobre una serie ya convertida a
+mensual, `ROC` no solo calcula mal la primera fila — **desalinea toda
+la serie**, corriendo el índice de fechas contra los valores.
+
+```{r roc-bug-demo}
+retornos_roc <- TTR::ROC(x = precio, type = "continuous", na.pad = F) %>%
+  `colnames<-`(acciones)
+
+retornos_correctos <- diff(log(precio)) %>% na.omit() %>% `colnames<-`(acciones)
+
+# Comparación directa, primeras filas de AAPL
+data.frame(
+  fecha = index(retornos_roc)[1:5],
+  ROC_bug = as.numeric(retornos_roc[1:5, "AAPL"]),
+  manual_correcto = as.numeric(retornos_correctos[1:5, "AAPL"])
+)
+```
+
+La primera fila de `ROC` (3.68 ≈ 368%) resulta ser literalmente
+`log(precio)` de ese mes **sin restar nada** — no un retorno. Y las
+filas siguientes tampoco calzan con el retorno correcto: en vez de
+$\ln(P_t/P_{t-1})$, terminan calculando $\ln(P_{t+1}/P_{t-1})$ (un
+retorno de 2 meses, no de 1) corrido una posición. **Conclusión
+práctica: no usar `TTR::ROC` para retornos mensuales de una serie
+convertida con `to.monthly()`** — la alternativa directa
+(`diff(log(precio))` + `na.omit()`) da el resultado correcto y es
+justo lo que ya se usó en el taller.
+
+```{r retornos-correctos}
+retornos <- retornos_correctos
+head(retornos)
+```
+
+------------------------------------------------------------------------
+
+# Parte 6 — Matriz de varianzas y covarianzas
+
+**Qué hace**: calcula la matriz de varianzas-covarianzas de los 15
+retornos.
+
+**Por qué (teoría)**: la covarianza entre dos activos mide si se mueven
+juntos (positiva) o en direcciones opuestas (negativa). Es el insumo
+central de la teoría de portafolios de Markowitz: la varianza de un
+portafolio **no es** el promedio ponderado de las varianzas
+individuales — depende también de cuánto covarían entre sí los activos.
+Dos activos con la misma varianza individual pueden dar un portafolio
+mucho más o menos riesgoso dependiendo de si su covarianza es alta o
+baja (o negativa).
+
+```{r covarianzas}
+varianzas <- var(retornos)
+round(varianzas, 5)
+```
+
+------------------------------------------------------------------------
+
+# Parte 7 — Matriz de correlación
+
+**Qué hace**: calcula y grafica la matriz de correlación (la covarianza
+normalizada, siempre entre -1 y 1) entre los 15 activos.
+
+**Por qué (teoría)**: la correlación es la misma información que la
+covarianza pero en una escala interpretable directamente (-1 =
+inversamente proporcionales, 0 = sin relación lineal, 1 = se mueven
+exactamente igual). El beneficio de diversificar un portafolio depende
+de **qué tan baja** es esta correlación entre los activos que lo
+componen — combinar activos con correlación cercana a 1 casi no reduce
+el riesgo total, mientras que combinar activos con correlación baja o
+negativa sí lo hace.
+
+```{r correlacion}
+correlaciones <- cor(retornos)
+round(correlaciones, 2)
+```
+
+```{r correlacion-plot, fig.width=7, fig.height=6}
+ggcorrplot::ggcorrplot(correlaciones,
+                       lab = T,
+                       type = "lower",
+                       lab_size = 3,
+                       tl.cex = 7,
+                       title = "Matriz de correlaciones")
+```
+
+------------------------------------------------------------------------
+
+# Parte 8 — Significancia estadística de las correlaciones
+
+**Qué hace**: calcula el p-valor de cada correlación (prueba de
+hipótesis $H_0: \rho = 0$) y sombrea en el gráfico las correlaciones
+que **no** son estadísticamente distintas de cero.
+
+**Por qué (teoría)**: con pocas observaciones (acá solo
+`r nrow(retornos)` meses), una correlación muestral puede verse
+distinta de 0 solo por ruido de muestreo, sin que exista una relación
+real entre esos dos activos. El test de significancia (basado en el
+estadístico $t = r\sqrt{\frac{n-2}{1-r^2}}$) filtra esas correlaciones
+poco confiables — importante antes de usar la matriz completa como
+insumo de una optimización de portafolio: incluir una covarianza que en
+realidad es ruido puede llevar a una asignación de pesos que no tiene
+ningún fundamento real.
+
+```{r correlacion-significancia, fig.width=7, fig.height=6}
+p_mat <- ggcorrplot::cor_pmat(retornos)
+
+ggcorrplot::ggcorrplot(correlaciones,
+                       lab = T,
+                       type = "lower",
+                       lab_size = 3,
+                       tl.cex = 7,
+                       title = "Matriz de correlaciones (tachadas = no significativas al 5%)",
+                       p.mat = p_mat,
+                       sig.level = 0.05)
+```
